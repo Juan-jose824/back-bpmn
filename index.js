@@ -2,12 +2,25 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 const bcrypt = require('bcrypt');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({limit: '10mb'}));
 
-// --- LOGIN ---
+// Crear la carpeta 'uploads' si no existe
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)){
+    fs.mkdirSync(uploadDir);
+}
+
+// + Hacer pública la carpeta para que el navegador acceda a las fotos
+app.use('/uploads', express.static(uploadDir));
+
+
+
+// LOGIN
 app.post('/api/login', async (req, res) => {
     const {email, pass} = req.body;
     try {
@@ -27,7 +40,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- REGISTRAR USUARIO ---
+// REGISTRAR USUARIO
 app.post('/api/register', async (req, res) => {
     const { username, email, password, role } = req.body;
     try {
@@ -41,7 +54,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- OBTENER USUARIOS ---
+// OBTENER USUARIOS
 app.get('/api/users', async (req, res) => {
     try {
         const result = await pool.query('SELECT user_name, email, rol, fecha_registro FROM users ORDER BY fecha_registro DESC');
@@ -51,7 +64,7 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-// --- ELIMINAR USUARIO (NUEVO) ---
+// ELIMINAR USUARIO
 app.delete('/api/users/:username', async (req, res) => {
     const { username } = req.params;
     try {
@@ -63,16 +76,42 @@ app.delete('/api/users/:username', async (req, res) => {
     }
 });
 
-// --- ACTUALIZAR USUARIO (NUEVO) ---
+// ACTUALIZAR USUARIO
 app.put('/api/users/:username', async (req, res) => {
-    const { username } = req.params; // El nombre original para buscarlo
-    const { new_username, role } = req.body; // Los nuevos datos
+    const { username } = req.params;
+    const { new_username, role } = req.body;
     try {
         const query = 'UPDATE users SET user_name = $1, rol = $2 WHERE user_name = $3 RETURNING *';
         const result = await pool.query(query, [new_username || username, role, username]);
         res.json({ message: 'Usuario actualizado', user: result.rows[0] });
     } catch (err) {
         res.status(500).json({ error: 'Error al actualizar usuario' });
+    }
+});
+
+// ACTUALIZAR IMAGEN DE PERFIL
+app.put('/api/users/profile-image/:username', async (req, res) => {
+    const { username } = req.params;
+    const { imageBase64 } = req.body; 
+
+    try {
+        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        const fileName = `profile-${username}-${Date.now()}.png`;
+        const filePath = path.join(uploadDir, fileName);
+
+        fs.writeFileSync(filePath, buffer);
+
+        const query = 'UPDATE users SET profile_image = $1 WHERE user_name = $2 RETURNING profile_image';
+        const result = await pool.query(query, [fileName, username]);
+        
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+        res.json({ message: 'Imagen guardada', fileName: result.rows[0].profile_image });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al procesar imagen' });
     }
 });
 
