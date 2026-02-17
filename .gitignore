@@ -1,0 +1,26 @@
+# --- DEPENDENCIAS (PESADO) ---
+node_modules/
+.npm/
+
+# --- ANGULAR (GENERADO) ---
+.angular/
+/dist/
+/browser/
+/.server/
+/out-tsc/
+/.vscode/
+.editorconfig
+
+# BACKEND / NODE
+# Ignorar la carpeta de imágenes subidas (uploads)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Archivos de entorno y seguridad
+.env
+.env.local
+
+# ARCHIVOS DE SISTEMA
+.DS_Store
+Thumbs.db
+*.log
