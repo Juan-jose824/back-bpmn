@@ -81,7 +81,7 @@ app.put('/api/users/:username', async (req, res) => {
     const { username } = req.params;
     const { new_username, role } = req.body;
     try {
-        const query = 'UPDATE users SET user_name = $1, rol = $2 WHERE user_name = $3 RETURNING *';
+        const query = 'UPDATE users SET profile_image = $1 WHERE user_name ILIKE $2 RETURNING profile_image';
         const result = await pool.query(query, [new_username || username, role, username]);
         res.json({ message: 'Usuario actualizado', user: result.rows[0] });
     } catch (err) {
