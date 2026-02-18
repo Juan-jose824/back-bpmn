@@ -79,13 +79,36 @@ app.delete('/api/users/:username', async (req, res) => {
 // ACTUALIZAR USUARIO
 app.put('/api/users/:username', async (req, res) => {
     const { username } = req.params;
-    const { new_username, role } = req.body;
+    const { new_username, email, role, password } = req.body;
+
     try {
-        const query = 'UPDATE users SET profile_image = $1 WHERE user_name ILIKE $2 RETURNING profile_image';
-        const result = await pool.query(query, [new_username || username, role, username]);
-        res.json({ message: 'Usuario actualizado', user: result.rows[0] });
+        let query;
+        let params;
+
+        if (password && password.trim() !== '') {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            query = `UPDATE users 
+                     SET user_name = $1, email = $2, rol = $3, pass = $4 
+                     WHERE user_name = $5`;
+            params = [new_username, email, role, hashedPassword, username];
+        } else {
+            query = `UPDATE users 
+                     SET user_name = $1, email = $2, rol = $3 
+                     WHERE user_name = $4`;
+            params = [new_username, email, role, username];
+        }
+
+        const result = await pool.query(query, params);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        res.json({ message: 'Usuario actualizado correctamente' });
     } catch (err) {
-        res.status(500).json({ error: 'Error al actualizar usuario' });
+        console.error('--- ERROR DETALLADO ---');
+        console.error(err); 
+        res.status(500).json({ error: 'Error interno: ' + err.message });
     }
 });
 
