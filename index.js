@@ -1,13 +1,34 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+
+const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'access_secret_super_seguro';
+const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'refresh_secret_super_seguro';
+const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES || '15m';
+const REFRESH_EXPIRES = process.env.JWT_REFRESH_EXPIRES || '30m';
+// Convierte "30m", "1h", "7d" a milisegundos para la cookie
+function expiresToMs(s) {
+    const n = parseInt(s, 10);
+    if (s.endsWith('m')) return n * 60 * 1000;
+    if (s.endsWith('h')) return n * 60 * 60 * 1000;
+    if (s.endsWith('d')) return n * 24 * 60 * 60 * 1000;
+    return 30 * 60 * 1000;
+}
+const REFRESH_COOKIE_MAX_AGE = expiresToMs(REFRESH_EXPIRES);
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: 'http://localhost:4200',
+    credentials: true
+}));
 app.use(express.json({limit: '10mb'}));
+app.use(cookieParser());
 
 // Crear la carpeta 'uploads' si no existe
 const uploadDir = path.join(__dirname, 'uploads');
@@ -20,25 +41,73 @@ app.use('/uploads', express.static(uploadDir));
 
 
 
-// LOGIN
+// LOGIN (devuelve accessToken + user; refreshToken en cookie httpOnly)
 app.post('/api/login', async (req, res) => {
-    const {email, pass} = req.body;
+    const { email, pass } = req.body;
     try {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado'});
-        
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+
         const usuario = result.rows[0];
         const validPassword = await bcrypt.compare(pass, usuario.pass);
+        if (!validPassword) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
-        if (!validPassword) return res.status(401).json({error: 'Contraseña incorrecta'});
+        const payload = {
+            id: usuario.id || usuario.user_name,
+            username: usuario.user_name,
+            rol: usuario.rol
+        };
 
-        const { pass: _, ...datosUsuario} = usuario;
-        res.json(datosUsuario);
+        const accessToken = jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
+        const refreshToken = jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
+
+        const cookieOptions = { httpOnly: true, secure: false, sameSite: 'strict', maxAge: REFRESH_COOKIE_MAX_AGE };
+        res.cookie('refreshToken', refreshToken, cookieOptions);
+
+        res.json({
+            accessToken,
+            user: payload
+        });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Error en el servidor'});
+        res.status(500).json({ error: 'Error en el servidor' });
     }
 });
+
+// REFRESH (lee refreshToken de la cookie; devuelve nuevo accessToken y renueva cookie = "actividad")
+app.post('/api/refresh', (req, res) => {
+    const token = req.cookies.refreshToken;
+    if (!token) return res.status(401).json({ error: 'Refresh token no proporcionado' });
+
+    jwt.verify(token, REFRESH_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: 'Sesión expirada por inactividad' });
+        const payload = { id: user.id, username: user.username, rol: user.rol };
+        const newAccessToken = jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
+        const newRefreshToken = jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
+        const cookieOptions = { httpOnly: true, secure: false, sameSite: 'strict', maxAge: REFRESH_COOKIE_MAX_AGE };
+        res.cookie('refreshToken', newRefreshToken, cookieOptions);
+        res.json({ accessToken: newAccessToken });
+    });
+});
+
+// LOGOUT (borra la cookie refreshToken)
+app.post('/api/logout', (req, res) => {
+    const cookieOptions = { httpOnly: true, secure: false, sameSite: 'strict' };
+    res.clearCookie('refreshToken', cookieOptions);
+    res.sendStatus(204);
+});
+
+// Middleware: verifica JWT en header Authorization: Bearer <token>
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.startsWith('Bearer ') && authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Token no proporcionado' });
+    jwt.verify(token, ACCESS_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: 'Token inválido o expirado' });
+        req.user = user;
+        next();
+    });
+}
 
 // REGISTRAR USUARIO
 app.post('/api/register', async (req, res) => {
@@ -54,8 +123,8 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// OBTENER USUARIOS
-app.get('/api/users', async (req, res) => {
+// OBTENER USUARIOS (protegido)
+app.get('/api/users', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT user_name, email, rol, fecha_registro FROM users ORDER BY fecha_registro DESC');
         res.json(result.rows);
@@ -64,8 +133,8 @@ app.get('/api/users', async (req, res) => {
     }
 });
 
-// ELIMINAR USUARIO
-app.delete('/api/users/:username', async (req, res) => {
+// ELIMINAR USUARIO (protegido)
+app.delete('/api/users/:username', authenticateToken, async (req, res) => {
     const { username } = req.params;
     try {
         const result = await pool.query('DELETE FROM users WHERE user_name = $1', [username]);
@@ -76,8 +145,8 @@ app.delete('/api/users/:username', async (req, res) => {
     }
 });
 
-// ACTUALIZAR USUARIO
-app.put('/api/users/:username', async (req, res) => {
+// ACTUALIZAR USUARIO (protegido)
+app.put('/api/users/:username', authenticateToken, async (req, res) => {
     const { username } = req.params;
     const { new_username, email, role, password } = req.body;
 
@@ -112,8 +181,8 @@ app.put('/api/users/:username', async (req, res) => {
     }
 });
 
-// ACTUALIZAR IMAGEN DE PERFIL
-app.put('/api/users/profile-image/:username', async (req, res) => {
+// ACTUALIZAR IMAGEN DE PERFIL (protegido)
+app.put('/api/users/profile-image/:username', authenticateToken, async (req, res) => {
     const { username } = req.params;
     const { imageBase64 } = req.body; 
 
@@ -138,4 +207,5 @@ app.put('/api/users/profile-image/:username', async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('Servidor en http://localhost:3000'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('Servidor en http://localhost:' + PORT));
