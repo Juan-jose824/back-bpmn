@@ -86,7 +86,6 @@ app.post('/api/ai/analyze', authenticateToken, upload.single('file'), async (req
 app.post('/api/login', async (req, res) => {
     const { email, pass } = req.body;
     try {
-        // CORRECCIÓN: Incluimos profile_image en la consulta
         const result = await pool.query('SELECT id_user, user_name, email, pass, rol, profile_image FROM users WHERE email = $1', [email]);
         if (result.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
 
@@ -94,7 +93,6 @@ app.post('/api/login', async (req, res) => {
         const validPassword = await bcrypt.compare(pass, usuario.pass);
         if (!validPassword) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
-        // CORRECCIÓN: Pasamos profile_image al payload del token y la respuesta
         const payload = { 
             id: usuario.id_user, 
             username: usuario.user_name, 
@@ -132,7 +130,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ==========================================
-// 3. GESTIÓN DE USUARIOS
+// 3. GESTIÓN DE USUARIOS (CORREGIDO)
 // ==========================================
 app.post('/api/register', async (req, res) => {
     const { username, email, password, role } = req.body;
@@ -157,8 +155,55 @@ app.get('/api/users', authenticateToken, async (req, res) => {
     }
 });
 
+// NUEVO: Ruta para actualizar usuario (Soluciona error al editar)
+app.put('/api/users/:username', authenticateToken, async (req, res) => {
+    const { username } = req.params;
+    const { new_username, email, role, password } = req.body;
+
+    try {
+        let query = 'UPDATE users SET user_name = $1, email = $2, rol = $3';
+        let params = [new_username, email, role, username];
+
+        if (password) {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            query += ', pass = $5 WHERE user_name = $4';
+            params.push(hashedPassword);
+        } else {
+            query += ' WHERE user_name = $4';
+        }
+
+        const result = await pool.query(query, params);
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
+        
+        res.json({ message: 'Usuario actualizado correctamente' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al actualizar usuario' });
+    }
+});
+
+// NUEVO: Ruta para eliminar usuario (Soluciona el error 404 del log)
+app.delete('/api/users/:identifier', authenticateToken, async (req, res) => {
+    const { identifier } = req.params;
+    try {
+        // Borra por ID o por nombre de usuario
+        const result = await pool.query(
+            'DELETE FROM users WHERE id_user::text = $1 OR user_name = $1 RETURNING *',
+            [identifier]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+        res.json({ message: 'Usuario eliminado correctamente' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error al eliminar usuario' });
+    }
+});
+
 // ==========================================
-// 4. HISTORIAL Y ELIMINACIÓN
+// 4. HISTORIAL Y ELIMINACIÓN DE ANÁLISIS
 // ==========================================
 app.post('/api/delete-analysis', authenticateToken, async (req, res) => {
     const { ids } = req.body; 
@@ -186,10 +231,10 @@ app.post('/api/save-analysis', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/my-history', authenticateToken, async (req, res) => {
-    const user_name = req.user.username;
+    const user_id = req.user.id;
     try {
-        const query = `SELECT a.* FROM ai_analysis a JOIN users u ON a.id_user = u.id_user WHERE u.user_name = $1 ORDER BY a.fecha_creacion DESC`;
-        const result = await pool.query(query, [user_name]);
+        const query = `SELECT * FROM ai_analysis WHERE id_user = $1 ORDER BY fecha_creacion DESC`;
+        const result = await pool.query(query, [user_id]);
         res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener historial' });
@@ -197,7 +242,7 @@ app.get('/api/my-history', authenticateToken, async (req, res) => {
 });
 
 // ============================================================
-// ACTUALIZACIÓN DE IMAGEN (Corregida la URL para Angular)
+// ACTUALIZACIÓN DE IMAGEN DE PERFIL
 // ============================================================
 app.put('/api/users/:username/profile-image', authenticateToken, async (req, res) => {
     const { username } = req.params;
