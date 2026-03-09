@@ -203,5 +203,52 @@ app.get('/api/my-history', authenticateToken, async (req, res) => {
     }
 });
 
+// ============================================================
+// RUTA PARA ACTUALIZAR IMAGEN DE PERFIL
+// ============================================================
+app.put('/api/users/:username/profile-image', authenticateToken, async (req, res) => {
+    const { username } = req.params;
+    const { image } = req.body; // Base64 que viene del frontend
+
+    if (!image) return res.status(400).json({ error: 'No se recibió ninguna imagen' });
+
+    try {
+        // 1. Extraer datos del Base64
+        const matches = image.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches || matches.length !== 3) {
+            return res.status(400).json({ error: 'Formato de imagen inválido' });
+        }
+
+        const extension = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+        const imageData = Buffer.from(matches[2], 'base64');
+        
+        // 2. Nombre único
+        const fileName = `profile_${username}_${Date.now()}.${extension}`;
+        const filePath = path.join(uploadDir, fileName);
+
+        // 3. Guardar archivo
+        fs.writeFileSync(filePath, imageData);
+
+        // 4. Actualizar DB
+        const result = await pool.query(
+            'UPDATE users SET profile_image = $1 WHERE user_name = $2 RETURNING profile_image',
+            [fileName, username]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado en la base de datos' });
+        }
+
+        res.json({ 
+            message: 'Imagen actualizada con éxito', 
+            fileName: fileName 
+        });
+
+    } catch (err) {
+        console.error('Error detallado:', err);
+        res.status(500).json({ error: 'Error al procesar la imagen en el servidor' });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend Bridge iniciado en puerto ${PORT}`));
