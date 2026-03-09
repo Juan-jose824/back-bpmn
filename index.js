@@ -86,14 +86,21 @@ app.post('/api/ai/analyze', authenticateToken, upload.single('file'), async (req
 app.post('/api/login', async (req, res) => {
     const { email, pass } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        // CORRECCIÓN: Incluimos profile_image en la consulta
+        const result = await pool.query('SELECT id_user, user_name, email, pass, rol, profile_image FROM users WHERE email = $1', [email]);
         if (result.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
 
         const usuario = result.rows[0];
         const validPassword = await bcrypt.compare(pass, usuario.pass);
         if (!validPassword) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
-        const payload = { id: usuario.id_user, username: usuario.user_name, rol: usuario.rol };
+        // CORRECCIÓN: Pasamos profile_image al payload del token y la respuesta
+        const payload = { 
+            id: usuario.id_user, 
+            username: usuario.user_name, 
+            rol: usuario.rol,
+            profile_image: usuario.profile_image 
+        };
         const accessToken = jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
         const refreshToken = jwt.sign(payload, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
 
@@ -113,7 +120,7 @@ app.post('/api/refresh', (req, res) => {
 
     jwt.verify(token, REFRESH_SECRET, (err, user) => {
         if (err) return res.status(403).json({ error: 'Sesión expirada' });
-        const payload = { id: user.id, username: user.username, rol: user.rol };
+        const payload = { id: user.id, username: user.username, rol: user.rol, profile_image: user.profile_image };
         const newAccessToken = jwt.sign(payload, ACCESS_SECRET, { expiresIn: ACCESS_EXPIRES });
         res.json({ accessToken: newAccessToken });
     });
@@ -153,25 +160,15 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 // ==========================================
 // 4. HISTORIAL Y ELIMINACIÓN
 // ==========================================
-
 app.post('/api/delete-analysis', authenticateToken, async (req, res) => {
     const { ids } = req.body; 
     const userId = req.user.id;
-    console.log(`Eliminando IDs: ${ids} para usuario: ${userId}`);
-
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
-        return res.status(400).json({ error: 'No se enviaron IDs válidos' });
-    }
+    if (!ids || !Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No se enviaron IDs válidos' });
 
     try {
-        const result = await pool.query(
-            'DELETE FROM ai_analysis WHERE id_analysis = ANY($1) AND id_user = $2',
-            [ids, userId]
-        );
-        console.log(`Filas borradas: ${result.rowCount}`);
+        const result = await pool.query('DELETE FROM ai_analysis WHERE id_analysis = ANY($1) AND id_user = $2', [ids, userId]);
         res.json({ message: 'Eliminado correctamente', rowCount: result.rowCount });
     } catch (err) {
-        console.error(err);
         res.status(500).json({ error: 'Error interno al eliminar' });
     }
 });
@@ -191,11 +188,7 @@ app.post('/api/save-analysis', authenticateToken, async (req, res) => {
 app.get('/api/my-history', authenticateToken, async (req, res) => {
     const user_name = req.user.username;
     try {
-        const query = `
-            SELECT a.* FROM ai_analysis a
-            JOIN users u ON a.id_user = u.id_user
-            WHERE u.user_name = $1
-            ORDER BY a.fecha_creacion DESC`;
+        const query = `SELECT a.* FROM ai_analysis a JOIN users u ON a.id_user = u.id_user WHERE u.user_name = $1 ORDER BY a.fecha_creacion DESC`;
         const result = await pool.query(query, [user_name]);
         res.json(result.rows);
     } catch (err) {
@@ -204,49 +197,35 @@ app.get('/api/my-history', authenticateToken, async (req, res) => {
 });
 
 // ============================================================
-// RUTA PARA ACTUALIZAR IMAGEN DE PERFIL
+// ACTUALIZACIÓN DE IMAGEN (Corregida la URL para Angular)
 // ============================================================
 app.put('/api/users/:username/profile-image', authenticateToken, async (req, res) => {
     const { username } = req.params;
-    const { image } = req.body; // Base64 que viene del frontend
+    const { image } = req.body;
 
     if (!image) return res.status(400).json({ error: 'No se recibió ninguna imagen' });
 
     try {
-        // 1. Extraer datos del Base64
         const matches = image.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
-        if (!matches || matches.length !== 3) {
-            return res.status(400).json({ error: 'Formato de imagen inválido' });
-        }
+        if (!matches || matches.length !== 3) return res.status(400).json({ error: 'Formato inválido' });
 
         const extension = matches[1] === 'jpeg' ? 'jpg' : matches[1];
         const imageData = Buffer.from(matches[2], 'base64');
-        
-        // 2. Nombre único
         const fileName = `profile_${username}_${Date.now()}.${extension}`;
         const filePath = path.join(uploadDir, fileName);
 
-        // 3. Guardar archivo
         fs.writeFileSync(filePath, imageData);
 
-        // 4. Actualizar DB
         const result = await pool.query(
             'UPDATE users SET profile_image = $1 WHERE user_name = $2 RETURNING profile_image',
             [fileName, username]
         );
 
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Usuario no encontrado en la base de datos' });
-        }
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-        res.json({ 
-            message: 'Imagen actualizada con éxito', 
-            fileName: fileName 
-        });
-
+        res.json({ message: 'Éxito', fileName: fileName });
     } catch (err) {
-        console.error('Error detallado:', err);
-        res.status(500).json({ error: 'Error al procesar la imagen en el servidor' });
+        res.status(500).json({ error: 'Error en servidor' });
     }
 });
 
