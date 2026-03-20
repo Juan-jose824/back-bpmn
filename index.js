@@ -112,6 +112,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// Ruta para refrescar token
 app.post('/api/refresh', (req, res) => {
     const token = req.cookies.refreshToken;
     if (!token) return res.status(401).json({ error: 'No refresh token' });
@@ -124,6 +125,7 @@ app.post('/api/refresh', (req, res) => {
     });
 });
 
+// Ruta para logout
 app.post('/api/logout', (req, res) => {
     res.clearCookie('refreshToken', { httpOnly: true, secure: false, sameSite: 'strict' });
     res.sendStatus(204);
@@ -146,6 +148,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
+// Ruta para obtener todos los usuarios
 app.get('/api/users', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT id_user, user_name, email, rol, fecha_registro FROM users ORDER BY fecha_registro DESC');
@@ -155,7 +158,7 @@ app.get('/api/users', authenticateToken, async (req, res) => {
     }
 });
 
-// NUEVO: Ruta para actualizar usuario (Soluciona error al editar)
+// Ruta para actualizar usuario (Soluciona error al editar)
 app.put('/api/users/:username', authenticateToken, async (req, res) => {
     const { username } = req.params;
     const { new_username, email, role, password } = req.body;
@@ -182,7 +185,7 @@ app.put('/api/users/:username', authenticateToken, async (req, res) => {
     }
 });
 
-// NUEVO: Ruta para eliminar usuario (Soluciona el error 404 del log)
+//Ruta para eliminar usuario (Soluciona el error 404 del log)
 app.delete('/api/users/:identifier', authenticateToken, async (req, res) => {
     const { identifier } = req.params;
     try {
@@ -218,6 +221,7 @@ app.post('/api/delete-analysis', authenticateToken, async (req, res) => {
     }
 });
 
+// Ruta para guardar análisis
 app.post('/api/save-analysis', authenticateToken, async (req, res) => {
     const { file_name, markdown_content, bpmn_xml } = req.body;
     const user_id = req.user.id; 
@@ -230,6 +234,7 @@ app.post('/api/save-analysis', authenticateToken, async (req, res) => {
     }
 });
 
+// Ruta para obtener historial de análisis
 app.get('/api/my-history', authenticateToken, async (req, res) => {
     const user_id = req.user.id;
     try {
